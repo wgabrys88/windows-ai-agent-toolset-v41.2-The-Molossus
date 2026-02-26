@@ -21,7 +21,7 @@
   "capture_width": 640,
   "capture_height": 640,
   "capture_scale_percent": 100,
-  "capture_delay": 1.8,
+  "capture_delay": 3.0,
   "boot_enabled": false,
   "physical_execution": true,
   "action_delay_seconds": 0.15,
