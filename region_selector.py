@@ -359,16 +359,11 @@ def run() -> int:
         nx2 = max(0, min(1000, round(px2 * 1000 / sw)))
         ny2 = max(0, min(1000, round(py2 * 1000 / sh)))
 
-        data = {
-            "capture_crop": {
-                "x1": nx1,
-                "y1": ny1,
-                "x2": nx2,
-                "y2": ny2
-            }
-        }
-        with Path("selected_region.json").open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4)
+        with open("config.json", "r") as f:
+            config = json.load(f)
+        config["capture_crop"] = {"x1": nx1, "y1": ny1, "x2": nx2, "y2": ny2}
+        with open("config.json", "w") as f:
+            json.dump(config, f, indent=2)
         return 0
 
     return 0
