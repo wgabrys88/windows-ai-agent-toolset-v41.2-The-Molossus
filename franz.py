@@ -1,3 +1,11 @@
+import subprocess
+import sys
+
+selector_process = subprocess.run(['python', 'region_selector.py'])
+if selector_process.returncode != 0:
+    print("Region selector failed, exiting.")
+    sys.exit(1)
+
 import asyncio
 import base64
 import ctypes
