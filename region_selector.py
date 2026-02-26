@@ -1,47 +1,32 @@
-"""
-Franz region selector — visible topmost overlay to select CAPTURE_CROP.
-
-Windows 11 + Python 3.13 + stdlib/ctypes only.
-
-Controls:
-- Left mouse drag: select region
-- ESC or right click: cancel
-- Ctrl+Shift+Q: emergency quit (global hotkey)
-"""
-
 from __future__ import annotations
-
 import ctypes
 import ctypes.wintypes as W
 import sys
+import json
+from pathlib import Path
 
-
-# ----- Robust typedefs -----
 HCURSOR = getattr(W, "HCURSOR", W.HANDLE)
 HICON = getattr(W, "HICON", W.HANDLE)
 HMODULE = getattr(W, "HMODULE", W.HANDLE)
 
-LRESULT = ctypes.c_ssize_t  # pointer-sized on Win64
+LRESULT = ctypes.c_ssize_t
 WNDPROC = ctypes.WINFUNCTYPE(LRESULT, W.HWND, W.UINT, W.WPARAM, W.LPARAM)
 
 u32 = ctypes.WinDLL("user32", use_last_error=True)
 g32 = ctypes.WinDLL("gdi32", use_last_error=True)
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
-# Best-effort DPI awareness
 try:
-    ctypes.WinDLL("shcore", use_last_error=True).SetProcessDpiAwareness(2)  # PER_MONITOR_AWARE
+    ctypes.WinDLL("shcore", use_last_error=True).SetProcessDpiAwareness(2)
 except Exception:
     try:
         u32.SetProcessDPIAware()
     except Exception:
         pass
 
-
-# ----- Constants -----
 WS_EX_LAYERED = 0x00080000
 WS_EX_TOPMOST = 0x00000008
-WS_EX_TOOLWINDOW = 0x00000080  # keep it out of Alt-Tab; remove if you prefer Alt-Tab visibility
+WS_EX_TOOLWINDOW = 0x00000080
 WS_POPUP = 0x80000000
 WS_VISIBLE = 0x10000000
 
@@ -70,14 +55,12 @@ SM_CYSCREEN = 1
 PS_SOLID = 0
 PS_DASH = 1
 TRANSPARENT = 1
-NULL_BRUSH = 5  # stock object id
+NULL_BRUSH = 5
 
 MOD_CONTROL = 0x0002
 MOD_SHIFT = 0x0004
 HOTKEY_ID_QUIT = 1
 
-
-# ----- Structures -----
 class PAINTSTRUCT(ctypes.Structure):
     _fields_ = [
         ("hdc", W.HDC),
@@ -87,7 +70,6 @@ class PAINTSTRUCT(ctypes.Structure):
         ("fIncUpdate", W.BOOL),
         ("rgbReserved", W.BYTE * 32),
     ]
-
 
 class WNDCLASSEXW(ctypes.Structure):
     _fields_ = [
@@ -105,8 +87,6 @@ class WNDCLASSEXW(ctypes.Structure):
         ("hIconSm", HICON),
     ]
 
-
-# ----- Prototypes -----
 u32.GetSystemMetrics.argtypes = [ctypes.c_int]
 u32.GetSystemMetrics.restype = ctypes.c_int
 
@@ -147,7 +127,7 @@ u32.PostQuitMessage.argtypes = [ctypes.c_int]
 u32.PostQuitMessage.restype = None
 
 u32.GetMessageW.argtypes = [ctypes.POINTER(W.MSG), W.HWND, W.UINT, W.UINT]
-u32.GetMessageW.restype = ctypes.c_int  # IMPORTANT: can be -1
+u32.GetMessageW.restype = ctypes.c_int
 
 u32.TranslateMessage.argtypes = [ctypes.POINTER(W.MSG)]
 u32.TranslateMessage.restype = W.BOOL
@@ -185,16 +165,8 @@ g32.SetBkMode.restype = ctypes.c_int
 g32.GetStockObject.argtypes = [ctypes.c_int]
 g32.GetStockObject.restype = W.HGDIOBJ
 
-
-# ----- Helpers / state -----
-def _last_error_text() -> str:
-    err = ctypes.get_last_error()
-    try:
-        msg = ctypes.WinError(err).strerror
-    except Exception:
-        msg = "unknown"
-    return f"{err} ({msg})"
-
+u32.FillRect.argtypes = [W.HDC, ctypes.POINTER(W.RECT), W.HBRUSH]
+u32.FillRect.restype = W.BOOL
 
 def _get_xy(lp: int) -> tuple[int, int]:
     x = lp & 0xFFFF
@@ -204,7 +176,6 @@ def _get_xy(lp: int) -> tuple[int, int]:
     if y > 32767:
         y -= 65536
     return x, y
-
 
 sw = u32.GetSystemMetrics(SM_CXSCREEN)
 sh = u32.GetSystemMetrics(SM_CYSCREEN)
@@ -218,9 +189,7 @@ sx = sy = ex = ey = 0
 result_rect: tuple[int, int, int, int] | None = None
 _hwnd: W.HWND | None = None
 
-# IMPORTANT: keep the callback object alive (prevents GC -> dead window)
-_WNDPROC_REF = None  # set in run()
-
+_WNDPROC_REF = None
 
 def wndproc(hwnd: W.HWND, msg: int, wp: int, lp: int) -> int:
     global dragging, sx, sy, ex, ey, result_rect, _hwnd
@@ -229,7 +198,6 @@ def wndproc(hwnd: W.HWND, msg: int, wp: int, lp: int) -> int:
         return 1
 
     if msg == WM_HOTKEY:
-        # Ctrl+Shift+Q = emergency quit
         if int(wp) == HOTKEY_ID_QUIT:
             result_rect = None
             u32.DestroyWindow(hwnd)
@@ -283,13 +251,11 @@ def wndproc(hwnd: W.HWND, msg: int, wp: int, lp: int) -> int:
         ps = PAINTSTRUCT()
         hdc = u32.BeginPaint(hwnd, ctypes.byref(ps))
 
-        # Dim overlay background (solid black; window alpha makes it translucent)
-        brush_bg = g32.CreateSolidBrush(0x00000000)  # black
+        brush_bg = g32.CreateSolidBrush(0x00000000)
         rc = W.RECT(0, 0, sw, sh)
         u32.FillRect(hdc, ctypes.byref(rc), brush_bg)
         g32.DeleteObject(brush_bg)
 
-        # Draw selection rectangle (hollow)
         if dragging or (ex != sx or ey != sy):
             x1, y1 = min(sx, ex), min(sy, ey)
             x2, y2 = max(sx, ex), max(sy, ey)
@@ -315,7 +281,6 @@ def wndproc(hwnd: W.HWND, msg: int, wp: int, lp: int) -> int:
         return 0
 
     if msg == WM_DESTROY:
-        # best-effort cleanup
         try:
             u32.UnregisterHotKey(hwnd, HOTKEY_ID_QUIT)
         except Exception:
@@ -325,20 +290,12 @@ def wndproc(hwnd: W.HWND, msg: int, wp: int, lp: int) -> int:
 
     return int(u32.DefWindowProcW(hwnd, msg, wp, lp))
 
-
 def run() -> int:
     global _WNDPROC_REF, _hwnd, result_rect
-
-    print("Franz Region Selector")
-    print("- Drag with LEFT mouse button to select a rectangle")
-    print("- ESC or right click cancels")
-    print("- Ctrl+Shift+Q emergency quit (global hotkey)")
-    print()
 
     hinst = k32.GetModuleHandleW(None)
     cls_name = "FranzSelector"
 
-    # Keep WNDPROC alive globally
     _WNDPROC_REF = WNDPROC(wndproc)
 
     wc = WNDCLASSEXW()
@@ -358,9 +315,7 @@ def run() -> int:
     atom = u32.RegisterClassExW(ctypes.byref(wc))
     if not atom:
         err = ctypes.get_last_error()
-        # ERROR_CLASS_ALREADY_EXISTS (1410) can happen if you run twice in same process
         if err != 1410:
-            print(f"ERR: RegisterClassExW failed: {_last_error_text()}", file=sys.stderr)
             return 1
 
     ex_style = WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW
@@ -373,32 +328,23 @@ def run() -> int:
         None, None, hinst, None,
     )
     if not hwnd:
-        print(f"ERR: CreateWindowExW failed: {_last_error_text()}", file=sys.stderr)
         return 1
 
     _hwnd = hwnd
 
-    # Visible dim overlay: entire window alpha (0..255). Lower = more transparent.
     alpha = 90
     if not u32.SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA):
-        print(f"ERR: SetLayeredWindowAttributes failed: {_last_error_text()}", file=sys.stderr)
         return 1
 
-    # Make sure we can receive keyboard input (ESC)
     u32.SetForegroundWindow(hwnd)
     u32.SetFocus(hwnd)
 
-    # Register global hotkey: Ctrl+Shift+Q
-    if not u32.RegisterHotKey(hwnd, HOTKEY_ID_QUIT, MOD_CONTROL | MOD_SHIFT, ord("Q")):
-        # Not fatal, but warn
-        print(f"WARN: RegisterHotKey failed: {_last_error_text()}", file=sys.stderr)
+    u32.RegisterHotKey(hwnd, HOTKEY_ID_QUIT, MOD_CONTROL | MOD_SHIFT, ord("Q"))
 
-    # Message loop
     msg = W.MSG()
     while True:
         r = u32.GetMessageW(ctypes.byref(msg), None, 0, 0)
         if r == -1:
-            print(f"ERR: GetMessageW failed: {_last_error_text()}", file=sys.stderr)
             return 1
         if r == 0:
             break
@@ -413,13 +359,19 @@ def run() -> int:
         nx2 = max(0, min(1000, round(px2 * 1000 / sw)))
         ny2 = max(0, min(1000, round(py2 * 1000 / sh)))
 
-        print()
-        print(f'CAPTURE_CROP = {{"x1": {nx1}, "y1": {ny1}, "x2": {nx2}, "y2": {ny2}}}')
+        data = {
+            "capture_crop": {
+                "x1": nx1,
+                "y1": ny1,
+                "x2": nx2,
+                "y2": ny2
+            }
+        }
+        with Path("selected_region.json").open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
         return 0
 
-    print("Selection cancelled.")
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(run())
